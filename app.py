@@ -20,7 +20,7 @@ import streamlit as st
 # ----------------------------------------------------------------------------
 st.set_page_config(page_title="AI Code Reviewer & Bug Detector", page_icon="🐞", layout="wide")
 
-DEFAULT_MODEL = "gemini-3.5"
+DEFAULT_MODEL = "gemini-2.5-flash"
 MAX_CHARS = 40_000
 
 LANGUAGES = [
@@ -123,6 +123,7 @@ correct, and fix the issues you reported. Do NOT include line numbers in fixed_c
 # ----------------------------------------------------------------------------
 # Session state
 # ----------------------------------------------------------------------------
+st.session_state.setdefault("model_name", DEFAULT_MODEL)
 st.session_state.setdefault("result", None)
 st.session_state.setdefault("code_input", "")
 st.session_state.setdefault("reviewed_code", "")
@@ -195,11 +196,34 @@ def build_prompt(code, language, focus_labels, error_text, intent):
     return "\n\n".join(parts)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def list_flash_models(api_key: str):
+    """Ask the Gemini API which Flash models this key can use for generateContent."""
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+    skip = ("image", "tts", "live", "audio", "embedding", "robotics", "computer-use")
+    names = []
+    for m in client.models.list():
+        name = (m.name or "").replace("models/", "")
+        actions = m.supported_actions or []
+        if "flash" in name and "generateContent" in actions and not any(x in name for x in skip):
+            names.append(name)
+    return sorted(set(names), reverse=True)
+
+
+def use_picked_model():
+    picked = st.session_state.get("model_pick", "")
+    if picked:
+        st.session_state.model_name = picked
+
+
 def call_gemini(prompt: str) -> str:
     """Call Gemini and return raw text. Raises RuntimeError with a friendly message on failure."""
     api_key = get_api_key()
     if not api_key:
         raise RuntimeError("No Gemini API key found. Add it in the sidebar or in Streamlit secrets.")
+    model_used = (st.session_state.get("model_name") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     try:
         from google import genai
         from google.genai import types
@@ -226,6 +250,13 @@ def call_gemini(prompt: str) -> str:
     except RuntimeError:
         raise
     except Exception as exc:
+        msg = str(exc)
+        if "404" in msg or "NOT_FOUND" in msg:
+            raise RuntimeError(
+                f"The model '{model_used}' was not found for your API key. Model names must be exact "
+                f"(for example '{DEFAULT_MODEL}'). Open the sidebar and click 'Find available models' "
+                "to pick a valid one."
+            ) from exc
         raise RuntimeError(f"Gemini request failed: {exc}") from exc
 
 
@@ -326,8 +357,28 @@ with st.sidebar:
         help="Get a free key at https://aistudio.google.com/apikey. "
         "On Streamlit Cloud you can store it in Secrets instead.",
     )
-    st.text_input("Model name", value=DEFAULT_MODEL, key="model_name",
-                  help="Any Gemini Flash model, e.g. gemini-2.5-flash")
+    st.text_input(
+        "Model name",
+        key="model_name",
+        help=f"Must be an exact model ID, e.g. {DEFAULT_MODEL}. Not sure? Click the button below.",
+    )
+    if st.button("🔎 Find available models", help="Lists the Flash models your API key can use"):
+        if not get_api_key():
+            st.warning("Enter your API key first.")
+        else:
+            try:
+                st.session_state.available_models = list_flash_models(get_api_key())
+                if not st.session_state.available_models:
+                    st.warning("No Flash models were returned for this key.")
+            except Exception as exc:
+                st.error(f"Could not list models: {exc}")
+    if st.session_state.get("available_models"):
+        st.selectbox(
+            "Available Flash models (pick one)",
+            [""] + st.session_state.available_models,
+            key="model_pick",
+            on_change=use_picked_model,
+        )
     if get_api_key():
         st.success("API key detected ✅")
     else:
