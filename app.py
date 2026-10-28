@@ -20,7 +20,7 @@ import streamlit as st
 # ----------------------------------------------------------------------------
 st.set_page_config(page_title="AI Code Reviewer & Bug Detector", page_icon="🐞", layout="wide")
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.1"
 MAX_CHARS = 40_000
 
 LANGUAGES = [
